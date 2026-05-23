@@ -1,5 +1,5 @@
 """
-ScanForge Photogrammetry Pipeline
+Visionaire Photogrammetry Pipeline
 Real Structure from Motion (SfM) using OpenCV + Open3D.
 
 Pipeline stages:

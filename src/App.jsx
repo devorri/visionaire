@@ -657,7 +657,7 @@ function App() {
             <ScanLine size={22} />
           </div>
           <div>
-            <h1>ScanForge</h1>
+            <h1>Visionaire</h1>
             <p>3D capture studio</p>
           </div>
         </header>
@@ -787,7 +787,7 @@ function App() {
         <header className="viewer-toolbar">
           <div>
             <span className="eyebrow">{selectedScan?.status ?? 'No scans'}</span>
-            <h2>{selectedScan?.name ?? 'ScanForge'}</h2>
+            <h2>{selectedScan?.name ?? 'Visionaire'}</h2>
           </div>
           <div className="toolbar-actions">
             <button className={`icon-button ${autoRotate ? 'active' : ''}`} type="button" aria-label="Toggle rotation" onClick={() => setAutoRotate((value) => !value)}>

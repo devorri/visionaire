@@ -1,5 +1,5 @@
 """
-ScanForge Web — FastAPI Backend
+Visionaire Web — FastAPI Backend
 Handles photo uploads, photogrammetry processing, and model serving.
 """
 
@@ -34,7 +34,7 @@ from photogrammetry import reconstruct, STAGES
 
 # ── App setup ─────────────────────────────────────────────────────────
 
-app = FastAPI(title="ScanForge API", version="1.0.0")
+app = FastAPI(title="Visionaire API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,7 +53,7 @@ active_jobs: dict[str, dict] = {}
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "ScanForge API"}
+    return {"status": "ok", "service": "Visionaire API"}
 
 
 # ── Scan CRUD ─────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ def _process_scan_background(scan_id: str, quality: int, detail: int):
 
         # Run the actual reconstruction
         scan = get_scan(scan_id)
-        scan_name = scan.get("name", "ScanForge Model")
+        scan_name = scan.get("name", "Visionaire Model")
 
         result = reconstruct(
             image_bytes_list=image_bytes_list,

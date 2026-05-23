@@ -1,5 +1,5 @@
 """
-Supabase client helper for ScanForge backend.
+Supabase client helper for Visionaire backend.
 Handles database operations and storage uploads.
 """
 
