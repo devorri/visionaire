@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+opencv-python
+open3d
+numpy
+trimesh
+supabase
+python-dotenv
