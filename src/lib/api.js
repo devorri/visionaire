@@ -6,8 +6,12 @@
 const configuredApiUrl = import.meta.env.VITE_API_URL?.trim()
 const isLocalPage = ['localhost', '127.0.0.1', ''].includes(window.location.hostname)
 const pointsToLocalhost = configuredApiUrl && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(configuredApiUrl)
+const legacyApiUrl = 'https://visionaire-api.onrender.com'
+const productionApiUrl = 'https://visionaire.onrender.com'
 
-const API_URL = pointsToLocalhost && !isLocalPage
+const API_URL = configuredApiUrl === legacyApiUrl
+  ? productionApiUrl
+  : pointsToLocalhost && !isLocalPage
   ? ''
   : configuredApiUrl || (isLocalPage ? 'http://localhost:8000' : '')
 
