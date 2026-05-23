@@ -8,6 +8,7 @@ ENV PYTHONUNBUFFERED=1
 # Install system dependencies required by OpenCV and Open3D
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    colmap \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \

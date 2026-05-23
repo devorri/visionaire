@@ -36,6 +36,12 @@ try:
 except ImportError:
     HAS_TRIMESH = False
 
+try:
+    from colmap_reconstruction import is_colmap_available, reconstruct_with_colmap
+except ImportError:
+    is_colmap_available = None
+    reconstruct_with_colmap = None
+
 
 # ── Pipeline stages ──────────────────────────────────────────────────
 
@@ -441,6 +447,29 @@ def reconstruct(
     result = ReconstructionResult()
 
     try:
+        if reconstruct_with_colmap and is_colmap_available and is_colmap_available():
+            try:
+                colmap_result = reconstruct_with_colmap(
+                    image_bytes_list=image_bytes_list,
+                    quality=quality,
+                    detail=detail,
+                    scan_name=scan_name,
+                    on_progress=on_progress,
+                )
+                result.points_3d = colmap_result["points_3d"]
+                result.colors = colmap_result["colors"]
+                result.obj_bytes = colmap_result["obj_bytes"]
+                result.glb_bytes = colmap_result["glb_bytes"]
+                result.ply_bytes = colmap_result["ply_bytes"]
+                result.point_count = colmap_result["point_count"]
+                result.quality_score = colmap_result["quality_score"]
+                result.coverage_score = colmap_result["coverage_score"]
+                result.texture_score = colmap_result["texture_score"]
+                return result
+            except Exception as exc:
+                print(f"COLMAP reconstruction failed, falling back to OpenCV pipeline: {exc}")
+                traceback.print_exc()
+
         # Decode images
         images = []
         for raw in image_bytes_list:
