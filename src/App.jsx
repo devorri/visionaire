@@ -85,35 +85,20 @@ function slugify(value) {
 }
 
 
-function hashString(value) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-function makeRandom(seed) {
-  let value = seed || 1
-  return () => {
-    value += 0x6d2b79f5
-    let next = value
-    next = Math.imul(next ^ (next >>> 15), next | 1)
-    next ^= next + Math.imul(next ^ (next >>> 7), next | 61)
-    return ((next ^ (next >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-
-// ── 3D Model Viewer ──────────────────────────────────────────────────
-
 function ScanViewer({ scan, autoRotate, renderMode }) {
   const containerRef = useRef(null)
+  const [loadedUrl, setLoadedUrl] = useState('')
+  const [errorUrl, setErrorUrl] = useState('')
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return undefined
+
+    if (!scan?.model_url || scan.status !== 'ready') return undefined
+
+    const modelUrl = scan.model_url
+    const isSupportedModel = modelUrl.endsWith('.glb') || modelUrl.includes('.glb') || modelUrl.endsWith('.obj') || modelUrl.includes('.obj')
+    if (!isSupportedModel) return undefined
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color('#0d0f12')
@@ -144,9 +129,6 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
     const keyLight = new THREE.DirectionalLight('#ffffff', 2.6)
     keyLight.position.set(4, 5, 3)
     scene.add(keyLight)
-    const rimLight = new THREE.PointLight('#ff7a59', 22, 8)
-    rimLight.position.set(-2.7, 1.5, -2.2)
-    scene.add(rimLight)
 
     const floor = new THREE.GridHelper(5.5, 22, '#39565c', '#1f292c')
     floor.position.y = -1.28
@@ -155,163 +137,56 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
     scene.add(floor)
 
     const color = scan?.color ?? '#4fd1c5'
-    let modelLoaded = false
 
-    // ── Try to load real 3D model from Supabase ──
-    if (scan?.model_url && scan.status === 'ready') {
-      const modelUrl = scan.model_url
+    const fitModel = (model) => {
+      const box = new THREE.Box3().setFromObject(model)
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const maxDim = Math.max(size.x, size.y, size.z)
+      const scale = 2.5 / Math.max(maxDim, 0.001)
 
-      if (modelUrl.endsWith('.glb') || modelUrl.includes('.glb')) {
-        const loader = new GLTFLoader()
-        loader.load(
-          modelUrl,
-          (gltf) => {
-            const model = gltf.scene
-            // Auto-center and scale the model
-            const box = new THREE.Box3().setFromObject(model)
-            const center = box.getCenter(new THREE.Vector3())
-            const size = box.getSize(new THREE.Vector3())
-            const maxDim = Math.max(size.x, size.y, size.z)
-            const scale = 2.5 / Math.max(maxDim, 0.001)
+      model.position.sub(center)
+      model.scale.setScalar(scale)
+      group.add(model)
+      setLoadedUrl(modelUrl)
+    }
 
-            model.position.sub(center)
-            model.scale.setScalar(scale)
-
-            if (renderMode === 'mesh') {
-              model.traverse((child) => {
-                if (child.isMesh) {
-                  child.material = new THREE.MeshStandardMaterial({
-                    color: color,
-                    wireframe: true,
-                    transparent: true,
-                    opacity: 0.8,
-                  })
-                }
+    if (modelUrl.endsWith('.glb') || modelUrl.includes('.glb')) {
+      const loader = new GLTFLoader()
+      loader.load(
+        modelUrl,
+        (gltf) => fitModel(gltf.scene),
+        undefined,
+        (err) => {
+          console.warn('GLB load failed:', err)
+          setErrorUrl(modelUrl)
+        },
+      )
+    } else if (modelUrl.endsWith('.obj') || modelUrl.includes('.obj')) {
+      const loader = new OBJLoader()
+      loader.load(
+        modelUrl,
+        (obj) => {
+          obj.traverse((child) => {
+            if (child.isMesh) {
+              child.material = new THREE.MeshStandardMaterial({
+                color,
+                roughness: 0.5,
+                metalness: 0.08,
+                wireframe: renderMode === 'mesh',
               })
             }
-
-            group.add(model)
-            modelLoaded = true
-          },
-          undefined,
-          (err) => {
-            console.warn('GLB load failed, falling back to procedural:', err)
-          },
-        )
-      } else if (modelUrl.endsWith('.obj') || modelUrl.includes('.obj')) {
-        const loader = new OBJLoader()
-        loader.load(
-          modelUrl,
-          (obj) => {
-            const box = new THREE.Box3().setFromObject(obj)
-            const center = box.getCenter(new THREE.Vector3())
-            const size = box.getSize(new THREE.Vector3())
-            const maxDim = Math.max(size.x, size.y, size.z)
-            const scale = 2.5 / Math.max(maxDim, 0.001)
-
-            obj.position.sub(center)
-            obj.scale.setScalar(scale)
-
-            obj.traverse((child) => {
-              if (child.isMesh) {
-                child.material = new THREE.MeshStandardMaterial({
-                  color: color,
-                  roughness: 0.5,
-                  metalness: 0.08,
-                  wireframe: renderMode === 'mesh',
-                })
-              }
-            })
-
-            group.add(obj)
-            modelLoaded = true
-          },
-          undefined,
-          (err) => {
-            console.warn('OBJ load failed, falling back to procedural:', err)
-          },
-        )
-      }
+          })
+          fitModel(obj)
+        },
+        undefined,
+        (err) => {
+          console.warn('OBJ load failed:', err)
+          setErrorUrl(modelUrl)
+        },
+      )
     }
 
-    // ── Fallback: procedural visualization ──
-    // Always create procedural model; hide if real model loads
-    const seed = hashString(`${scan?.id ?? 'empty'}-${scan?.photo_count ?? 0}-${scan?.quality ?? 0}`)
-    const random = makeRandom(seed)
-
-    const geometry = new THREE.IcosahedronGeometry(1.18, 4)
-    const position = geometry.attributes.position
-    for (let index = 0; index < position.count; index += 1) {
-      const x = position.getX(index)
-      const y = position.getY(index)
-      const z = position.getZ(index)
-      const ripple = 1 + Math.sin(x * 7.4 + seed * 0.00001) * 0.055 + Math.cos((y + z) * 6.1) * 0.035
-      position.setXYZ(index, x * ripple * 0.92, y * ripple * 1.12, z * ripple * 0.78)
-    }
-    geometry.computeVertexNormals()
-
-    const meshMaterial = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.5,
-      metalness: 0.08,
-      transparent: true,
-      opacity: renderMode === 'points' ? 0.12 : 0.9,
-      wireframe: renderMode === 'mesh',
-    })
-
-    const fallbackMesh = new THREE.Mesh(geometry, meshMaterial)
-    fallbackMesh.visible = renderMode !== 'points' && !modelLoaded
-    group.add(fallbackMesh)
-
-    // Point cloud
-    const pointTotal = Math.min(9000, 1800 + (scan?.photo_count ?? 12) * 180)
-    const pointPositions = new Float32Array(pointTotal * 3)
-    const pointColors = new Float32Array(pointTotal * 3)
-    const base = new THREE.Color(color)
-    const warm = new THREE.Color('#ff7a59')
-    const light = new THREE.Color('#f4f0e8')
-
-    for (let index = 0; index < pointTotal; index += 1) {
-      const theta = random() * Math.PI * 2
-      const phi = Math.acos(2 * random() - 1)
-      const radius = 1.05 + random() * 0.42
-      const offset = index * 3
-
-      pointPositions[offset] = Math.sin(phi) * Math.cos(theta) * radius * 0.98
-      pointPositions[offset + 1] = Math.cos(phi) * radius * 1.18
-      pointPositions[offset + 2] = Math.sin(phi) * Math.sin(theta) * radius * 0.84
-
-      const mixTarget = random() > 0.45 ? warm : light
-      const pointColor = base.clone().lerp(mixTarget, random() * 0.5)
-      pointColors[offset] = pointColor.r
-      pointColors[offset + 1] = pointColor.g
-      pointColors[offset + 2] = pointColor.b
-    }
-
-    const pointGeometry = new THREE.BufferGeometry()
-    pointGeometry.setAttribute('position', new THREE.BufferAttribute(pointPositions, 3))
-    pointGeometry.setAttribute('color', new THREE.BufferAttribute(pointColors, 3))
-    const points = new THREE.Points(
-      pointGeometry,
-      new THREE.PointsMaterial({
-        size: renderMode === 'points' ? 0.026 : 0.015,
-        vertexColors: true,
-        transparent: true,
-        opacity: renderMode === 'surface' ? 0.45 : 0.88,
-      }),
-    )
-    group.add(points)
-
-    // Orbit rings
-    const ringMaterial = new THREE.MeshBasicMaterial({ color: '#4fd1c5', transparent: true, opacity: 0.32 })
-    const ringX = new THREE.Mesh(new THREE.TorusGeometry(1.55, 0.006, 8, 120), ringMaterial)
-    const ringY = ringX.clone()
-    const ringZ = ringX.clone()
-    ringY.rotation.x = Math.PI / 2
-    ringZ.rotation.y = Math.PI / 2
-    group.add(ringX, ringY, ringZ)
-
-    // Resize observer
     const resizeObserver = new ResizeObserver(([entry]) => {
       const nextWidth = entry.contentRect.width || width
       const nextHeight = entry.contentRect.height || height
@@ -322,20 +197,7 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
     resizeObserver.observe(container)
 
     let frameId = 0
-    const startedAt = window.performance.now()
     const animate = () => {
-      const elapsed = (window.performance.now() - startedAt) / 1000
-      ringX.rotation.z = elapsed * 0.22
-      ringY.rotation.z = elapsed * -0.18
-      ringZ.rotation.x = elapsed * 0.16
-      points.rotation.y = elapsed * 0.035
-
-      // Hide procedural fallback once real model loads
-      if (modelLoaded && fallbackMesh.visible) {
-        fallbackMesh.visible = false
-        points.visible = renderMode === 'points'
-      }
-
       if (autoRotate) group.rotation.y += 0.0025
       controls.autoRotate = autoRotate
       controls.update()
@@ -363,11 +225,24 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
     }
   }, [autoRotate, renderMode, scan])
 
-  return <div className="scan-viewer" ref={containerRef} aria-label="Interactive 3D scan viewer" />
+  const modelUrl = scan?.model_url || ''
+  const hasModel = Boolean(modelUrl && scan?.status === 'ready')
+  const isSupportedModel = modelUrl.endsWith('.glb') || modelUrl.includes('.glb') || modelUrl.endsWith('.obj') || modelUrl.includes('.obj')
+  const displayState = !hasModel ? 'empty' : !isSupportedModel || errorUrl === modelUrl ? 'error' : loadedUrl === modelUrl ? 'loaded' : 'loading'
+
+  return (
+    <div className="scan-viewer" ref={containerRef} aria-label="Interactive 3D scan viewer">
+      {displayState !== 'loaded' && (
+        <div className="scan-viewer-message">
+          {displayState === 'loading' && 'Loading reconstructed model'}
+          {displayState === 'error' && 'No valid reconstructed model was produced'}
+          {displayState === 'empty' && 'Process photos to generate a real model'}
+        </div>
+      )}
+    </div>
+  )
 }
 
-
-// ── Main App ─────────────────────────────────────────────────────────
 
 function App() {
   const fileInputRef = useRef(null)

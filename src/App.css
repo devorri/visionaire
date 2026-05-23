@@ -366,6 +366,17 @@
   inset: 0;
 }
 
+.scan-viewer-message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-soft);
+  text-align: center;
+  background: #0d0f12;
+}
+
 .scan-viewer canvas {
   display: block;
   width: 100%;
