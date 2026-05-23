@@ -56,6 +56,11 @@ def health():
     return {"status": "ok", "service": "Visionaire API"}
 
 
+@app.get("/")
+def root():
+    return health()
+
+
 # ── Scan CRUD ─────────────────────────────────────────────────────────
 
 @app.post("/api/scans")

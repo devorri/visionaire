@@ -56,6 +56,36 @@
   font-size: 13px;
 }
 
+.api-status {
+  min-width: 0;
+  height: 28px;
+  margin-left: auto;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-soft);
+  background: var(--surface-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.api-status.checking svg {
+  animation: spin 1s linear infinite;
+}
+
+.api-status.online {
+  color: var(--mint);
+  border-color: rgba(79, 209, 197, 0.35);
+}
+
+.api-status.offline {
+  color: var(--amber);
+  border-color: rgba(255, 179, 92, 0.38);
+}
+
 .panel-section {
   padding: 20px;
   border-bottom: 1px solid var(--line);
@@ -613,5 +643,13 @@
 
   .pipeline-list {
     justify-content: flex-start;
+  }
+
+  .brand-row {
+    flex-wrap: wrap;
+  }
+
+  .api-status {
+    margin-left: 56px;
   }
 }

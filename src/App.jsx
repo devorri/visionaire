@@ -32,6 +32,7 @@ import {
   startProcessing,
   getStatus,
   fetchScans,
+  checkApiHealth,
   deleteScan as apiDeleteScan,
 } from './lib/api.js'
 import './App.css'
@@ -390,8 +391,11 @@ function App() {
   const [autoRotate, setAutoRotate] = useState(true)
   const [renderMode, setRenderMode] = useState('surface')
   const [errorMessage, setErrorMessage] = useState('')
-  const [activeScanId, setActiveScanId] = useState(null) // scan being processed
-
+  const [apiStatus, setApiStatus] = useState({
+    state: 'checking',
+    message: 'Checking backend',
+    label: '',
+  })
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) ?? scans[0]
 
   const sourceStats = useMemo(() => {
@@ -418,6 +422,37 @@ function App() {
       }
     }
     loadScans()
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function refreshApiStatus() {
+      try {
+        const health = await checkApiHealth()
+        if (!isMounted) return
+        setApiStatus({
+          state: 'online',
+          message: health.message,
+          label: health.label,
+        })
+      } catch (err) {
+        if (!isMounted) return
+        setApiStatus({
+          state: 'offline',
+          message: 'Backend unreachable',
+          label: err.message,
+        })
+      }
+    }
+
+    refreshApiStatus()
+    const timer = window.setInterval(refreshApiStatus, 15000)
+
+    return () => {
+      isMounted = false
+      window.clearInterval(timer)
+    }
   }, [])
 
 
@@ -587,7 +622,6 @@ function App() {
       setProgress(0)
       setStage(0)
       setStageName('Starting...')
-      setActiveScanId(newScanId)
 
       await startProcessing(newScanId, quality, detail)
 
@@ -659,6 +693,12 @@ function App() {
           <div>
             <h1>Visionaire</h1>
             <p>3D capture studio</p>
+          </div>
+          <div className={`api-status ${apiStatus.state}`} title={apiStatus.label}>
+            {apiStatus.state === 'checking' && <LoaderCircle size={14} />}
+            {apiStatus.state === 'online' && <CheckCircle2 size={14} />}
+            {apiStatus.state === 'offline' && <AlertTriangle size={14} />}
+            <span>{apiStatus.state === 'online' ? 'Backend online' : apiStatus.message}</span>
           </div>
         </header>
 

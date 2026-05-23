@@ -3,16 +3,33 @@
  * Communicates with the FastAPI backend for scan operations.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim()
+const isLocalPage = ['localhost', '127.0.0.1', ''].includes(window.location.hostname)
+const pointsToLocalhost = configuredApiUrl && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(configuredApiUrl)
+
+const API_URL = pointsToLocalhost && !isLocalPage
+  ? ''
+  : configuredApiUrl || (isLocalPage ? 'http://localhost:8000' : '')
+
+function apiTargetLabel() {
+  return API_URL || window.location.origin
+}
 
 async function request(path, options = {}) {
   const url = `${API_URL}${path}`
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-    },
-  })
+  let response
+
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+      },
+    })
+  } catch {
+    const target = API_URL || 'this site'
+    throw new Error(`Could not reach the API at ${target}. Check VITE_API_URL for the deployed backend URL.`)
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -20,6 +37,22 @@ async function request(path, options = {}) {
   }
 
   return response.json()
+}
+
+export async function checkApiHealth() {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 4500)
+
+  try {
+    const data = await request('/api/health', { signal: controller.signal })
+    return {
+      ok: true,
+      label: apiTargetLabel(),
+      message: data.service || 'Backend online',
+    }
+  } finally {
+    window.clearTimeout(timeout)
+  }
 }
 
 
