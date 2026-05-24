@@ -42,6 +42,22 @@ except ImportError:
     is_colmap_available = None
     reconstruct_with_colmap = None
 
+try:
+    from meshy_reconstruction import is_meshy_configured, reconstruct_with_meshy
+except ImportError:
+    is_meshy_configured = None
+    reconstruct_with_meshy = None
+
+try:
+    from photorealistic_texturing import (
+        PhoturealisticRenderer,
+        TextureProjector,
+        NormalMapGenerator,
+    )
+    HAS_TEXTURING = True
+except ImportError:
+    HAS_TEXTURING = False
+
 
 # ── Pipeline stages ──────────────────────────────────────────────────
 
@@ -339,6 +355,10 @@ def _export_models(
     mesh,
     points_3d: np.ndarray,
     colors: np.ndarray,
+    images: list[np.ndarray] | None = None,
+    keypoints_list: list | None = None,
+    camera_matrices: list | None = None,
+    camera_poses: list | None = None,
     scan_name: str = "scanforge_model",
     on_progress: Callable | None = None,
 ) -> tuple[bytes | None, bytes | None, bytes | None]:
@@ -378,19 +398,66 @@ def _export_models(
             triangles = np.asarray(mesh.triangles)
             vertex_colors = None
 
-            if mesh.has_vertex_colors():
-                vc = np.asarray(mesh.vertex_colors)
-                # Convert to 0-255 RGBA
-                alpha = np.ones((len(vc), 1))
-                vertex_colors = np.hstack([vc, alpha])
-                vertex_colors = (vertex_colors * 255).astype(np.uint8)
+            # Apply photorealistic texturing if available
+            if HAS_TEXTURING and images is not None and camera_matrices is not None and camera_poses is not None:
+                try:
+                    renderer = PhoturealisticRenderer()
+                    materials = renderer.generate_complete_materials(
+                        images,
+                        camera_matrices,
+                        camera_poses,
+                        points_3d,
+                        vertices,
+                        triangles,
+                        atlas_size=2048,
+                    )
+                    
+                    # Create texture image
+                    albedo = materials["albedo"]
+                    
+                    # Convert to PIL Image for trimesh
+                    from PIL import Image
+                    texture_img = Image.fromarray(albedo)
+                    
+                    tm = trimesh.Trimesh(
+                        vertices=vertices,
+                        faces=triangles,
+                    )
+                    
+                    # Apply texture material
+                    material = trimesh.visual.SimpleMaterial(image=texture_img)
+                    tm.visual = trimesh.visual.TextureVisuals(uv=np.random.rand(len(vertices), 2), material=material)
+                    
+                    glb_bytes = tm.export(file_type="glb")
+                except Exception as tex_exc:
+                    print(f"Photorealistic texturing failed: {tex_exc}, falling back to vertex colors")
+                    # Fallback to vertex colors
+                    if mesh.has_vertex_colors():
+                        vc = np.asarray(mesh.vertex_colors)
+                        alpha = np.ones((len(vc), 1))
+                        vertex_colors = np.hstack([vc, alpha])
+                        vertex_colors = (vertex_colors * 255).astype(np.uint8)
 
-            tm = trimesh.Trimesh(
-                vertices=vertices,
-                faces=triangles,
-                vertex_colors=vertex_colors,
-            )
-            glb_bytes = tm.export(file_type="glb")
+                    tm = trimesh.Trimesh(
+                        vertices=vertices,
+                        faces=triangles,
+                        vertex_colors=vertex_colors,
+                    )
+                    glb_bytes = tm.export(file_type="glb")
+            else:
+                # Standard export with vertex colors
+                if mesh.has_vertex_colors():
+                    vc = np.asarray(mesh.vertex_colors)
+                    alpha = np.ones((len(vc), 1))
+                    vertex_colors = np.hstack([vc, alpha])
+                    vertex_colors = (vertex_colors * 255).astype(np.uint8)
+
+                tm = trimesh.Trimesh(
+                    vertices=vertices,
+                    faces=triangles,
+                    vertex_colors=vertex_colors,
+                )
+                glb_bytes = tm.export(file_type="glb")
         except Exception as exc:
             print(f"GLB export failed: {exc}")
 
@@ -447,6 +514,29 @@ def reconstruct(
     result = ReconstructionResult()
 
     try:
+        if reconstruct_with_meshy and is_meshy_configured and is_meshy_configured():
+            try:
+                meshy_result = reconstruct_with_meshy(
+                    image_bytes_list=image_bytes_list,
+                    quality=quality,
+                    detail=detail,
+                    scan_name=scan_name,
+                    on_progress=on_progress,
+                )
+                result.points_3d = meshy_result["points_3d"]
+                result.colors = meshy_result["colors"]
+                result.obj_bytes = meshy_result["obj_bytes"]
+                result.glb_bytes = meshy_result["glb_bytes"]
+                result.ply_bytes = meshy_result["ply_bytes"]
+                result.point_count = meshy_result["point_count"]
+                result.quality_score = meshy_result["quality_score"]
+                result.coverage_score = meshy_result["coverage_score"]
+                result.texture_score = meshy_result["texture_score"]
+                return result
+            except Exception as exc:
+                print(f"Meshy reconstruction failed, falling back to local pipeline: {exc}")
+                traceback.print_exc()
+
         if reconstruct_with_colmap and is_colmap_available and is_colmap_available():
             try:
                 colmap_result = reconstruct_with_colmap(
@@ -525,8 +615,21 @@ def reconstruct(
             mesh = _generate_mesh(pcd, on_progress)
 
         # Stage 7: Export
+        # Build camera matrices list for texture projection
+        camera_matrices = [K] * len(images)  # Same intrinsics for all frames
+        camera_poses = poses  # From pose recovery
+        
         obj_bytes, glb_bytes, ply_bytes = _export_models(
-            pcd, mesh, points_3d, colors, scan_name, on_progress
+            pcd, 
+            mesh, 
+            points_3d, 
+            colors,
+            images=images,
+            keypoints_list=kp_list,
+            camera_matrices=camera_matrices,
+            camera_poses=camera_poses,
+            scan_name=scan_name,
+            on_progress=on_progress
         )
 
         result.obj_bytes = obj_bytes

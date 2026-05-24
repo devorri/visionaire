@@ -163,6 +163,7 @@
 
 .capture-actions {
   margin: 14px 0;
+  flex-wrap: wrap;
 }
 
 #photo-upload {
@@ -249,6 +250,37 @@
   background: #090b0d;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.camera-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.recording-strip {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  color: var(--text-strong);
+  background: rgba(255, 122, 89, 0.11);
+  border: 1px solid rgba(255, 122, 89, 0.32);
+  border-radius: 8px;
+}
+
+.recording-strip span {
+  width: 9px;
+  height: 9px;
+  background: var(--coral);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgba(255, 122, 89, 0.15);
+}
+
+.recording-strip small {
+  color: var(--text-soft);
 }
 
 .status-text {
@@ -490,6 +522,64 @@
   font-size: 18px;
 }
 
+.dimension-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.dimension {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  background: var(--surface-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.dimension span,
+.helper-text {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.dimension strong {
+  color: var(--text-strong);
+  font-size: 15px;
+  text-align: right;
+}
+
+.calibration-row {
+  display: grid;
+  grid-template-columns: 1fr 104px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--text);
+}
+
+.calibration-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calibration-row input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text-strong);
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.helper-text {
+  margin: 10px 0 0;
+}
+
 .slider-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -593,7 +683,7 @@
 
   .inspector-panel {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .inspector-panel .panel-section {
@@ -633,7 +723,8 @@
   }
 
   .toolbar-actions,
-  .capture-actions {
+  .capture-actions,
+  .camera-controls {
     width: 100%;
   }
 

@@ -126,3 +126,123 @@ export async function fetchScan(scanId) {
 export async function deleteScan(scanId) {
   return request(`/api/scans/${scanId}`, { method: 'DELETE' })
 }
+
+
+// ── Measurement Calibration ──────────────────────────────────────────
+
+/**
+ * Calibrate measurement scale using ArUco marker detection.
+ */
+export async function calibrateWithAruco(scanId, markerSize = '10cm') {
+  const params = new URLSearchParams({ marker_size: markerSize })
+  return request(`/api/scans/${scanId}/calibration/aruco?${params}`, { method: 'POST' })
+}
+
+
+/**
+ * Calibrate using manually selected reference distance.
+ */
+export async function calibrateManual(scanId, referenceDistanceMeters) {
+  const params = new URLSearchParams({ reference_distance_meters: referenceDistanceMeters })
+  return request(`/api/scans/${scanId}/calibration/manual?${params}`, { method: 'POST' })
+}
+
+
+/**
+ * Reset calibration for a scan.
+ */
+export async function resetCalibration(scanId) {
+  return request(`/api/scans/${scanId}/calibration/reset`, { method: 'POST' })
+}
+
+
+/**
+ * Get bounding box dimensions in meters.
+ */
+export async function getDimensions(scanId) {
+  return request(`/api/scans/${scanId}/dimensions`)
+}
+
+
+// ── Progressive Refinement ──────────────────────────────────────────
+
+/**
+ * Initialize progressive refinement for a scan.
+ */
+export async function initializeRefiner(scanId) {
+  return request(`/api/scans/${scanId}/refiner/initialize`, { method: 'POST' })
+}
+
+
+/**
+ * Add a frame to progressive refinement.
+ */
+export async function addRefinementFrame(scanId, frameId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const params = new URLSearchParams({ frame_id: frameId })
+  return request(`/api/scans/${scanId}/refiner/add-frame?${params}`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+
+/**
+ * Get refinement statistics.
+ */
+export async function getRefinementStats(scanId) {
+  return request(`/api/scans/${scanId}/refiner/stats`)
+}
+
+
+// ── Live Camera Streaming ──────────────────────────────────────────
+
+/**
+ * Create a new live streaming session.
+ */
+export async function createLiveSession(quality = 60) {
+  const params = new URLSearchParams({ quality: quality.toString() })
+  return request(`/api/live-sessions?${params}`, { method: 'POST' })
+}
+
+
+/**
+ * Get live session status.
+ */
+export async function getLiveSession(sessionId) {
+  return request(`/api/live-sessions/${sessionId}`)
+}
+
+
+/**
+ * Process a frame from live camera.
+ */
+export async function processLiveFrame(sessionId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  return request(`/api/live-sessions/${sessionId}/frame`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+
+/**
+ * Finalize live session and save frames to scan.
+ */
+export async function finalizeLiveSession(sessionId, scanId) {
+  const params = new URLSearchParams({ scan_id: scanId })
+  return request(`/api/live-sessions/${sessionId}/finalize?${params}`, { method: 'POST' })
+}
+
+
+/**
+ * List all active live sessions.
+ */
+export async function listLiveSessions() {
+  return request('/api/live-sessions')
+}
+

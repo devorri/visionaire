@@ -16,6 +16,7 @@ import {
   Layers,
   LoaderCircle,
   Play,
+  Ruler,
   RotateCcw,
   ScanLine,
   SlidersHorizontal,
@@ -35,9 +36,12 @@ import {
   checkApiHealth,
   deleteScan as apiDeleteScan,
 } from './lib/api.js'
+import LiveCameraScanner from './components/LiveCameraScanner.jsx'
 import './App.css'
 
 const MAX_PHOTOS = 30
+const VIDEO_FRAME_COUNT = 12
+const SCAN_RECORDING_FRAME_COUNT = 20
 
 const PIPELINE = ['Feature detection', 'Feature matching', 'Pose recovery', 'Triangulation', 'Point cloud', 'Mesh generation', 'Export']
 
@@ -63,6 +67,66 @@ function readImageFile(file) {
   })
 }
 
+function loadVideoMetadata(video) {
+  return new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve
+    video.onerror = reject
+  })
+}
+
+function seekVideo(video, time) {
+  return new Promise((resolve, reject) => {
+    video.onseeked = resolve
+    video.onerror = reject
+    video.currentTime = time
+  })
+}
+
+async function extractVideoFrames(file, frameCount = VIDEO_FRAME_COUNT) {
+  const url = URL.createObjectURL(file)
+  const video = document.createElement('video')
+  video.src = url
+  video.muted = true
+  video.playsInline = true
+  video.preload = 'metadata'
+
+  try {
+    await loadVideoMetadata(video)
+
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 1
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1280
+    canvas.height = video.videoHeight || 720
+    const context = canvas.getContext('2d')
+    const frames = []
+
+    for (let index = 0; index < frameCount; index += 1) {
+      const time = ((index + 0.5) / frameCount) * duration
+      await seekVideo(video, Math.min(duration - 0.05, Math.max(0, time)))
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9))
+      if (!blob) continue
+
+      const frameFile = new File([blob], `${file.name.replace(/\.[^.]+$/, '')}-frame-${index + 1}.jpg`, {
+        type: 'image/jpeg',
+      })
+
+      frames.push({
+        id: makeId(),
+        name: frameFile.name,
+        src: URL.createObjectURL(blob),
+        file: frameFile,
+        origin: 'video',
+      })
+    }
+
+    return frames
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 function formatDate(dateString) {
   if (!dateString) {
     return new Intl.DateTimeFormat('en', {
@@ -84,8 +148,14 @@ function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 }
 
+function formatMeasurement(value, unit = 'model units') {
+  if (!Number.isFinite(value)) return '—'
+  const formatted = value >= 10 ? value.toFixed(1) : value.toFixed(2)
+  return `${formatted} ${unit}`
+}
 
-function ScanViewer({ scan, autoRotate, renderMode }) {
+
+function ScanViewer({ scan, autoRotate, renderMode, onDimensions }) {
   const containerRef = useRef(null)
   const [loadedUrl, setLoadedUrl] = useState('')
   const [errorUrl, setErrorUrl] = useState('')
@@ -145,6 +215,12 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
       const maxDim = Math.max(size.x, size.y, size.z)
       const scale = 2.5 / Math.max(maxDim, 0.001)
 
+      onDimensions?.({
+        width: size.x,
+        height: size.y,
+        depth: size.z,
+        longest: maxDim,
+      })
       model.position.sub(center)
       model.scale.setScalar(scale)
       group.add(model)
@@ -223,7 +299,7 @@ function ScanViewer({ scan, autoRotate, renderMode }) {
       renderer.dispose()
       renderer.domElement.remove()
     }
-  }, [autoRotate, renderMode, scan])
+  }, [autoRotate, onDimensions, renderMode, scan])
 
   const modelUrl = scan?.model_url || ''
   const hasModel = Boolean(modelUrl && scan?.status === 'ready')
@@ -248,6 +324,8 @@ function App() {
   const fileInputRef = useRef(null)
   const videoRef = useRef(null)
   const streamRef = useRef(null)
+  const recorderRef = useRef(null)
+  const recordedChunksRef = useRef([])
   const pollTimerRef = useRef(null)
 
   const [mode, setMode] = useState('object')
@@ -263,15 +341,57 @@ function App() {
   const [isUploading, setIsUploading] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [autoRotate, setAutoRotate] = useState(true)
   const [renderMode, setRenderMode] = useState('surface')
+  const [modelDimensionState, setModelDimensionState] = useState(null)
+  const [calibrationByScan, setCalibrationByScan] = useState({})
   const [errorMessage, setErrorMessage] = useState('')
+  const [isLiveScanning, setIsLiveScanning] = useState(false)
+  const [activeLiveScanId, setActiveLiveScanId] = useState(null)
   const [apiStatus, setApiStatus] = useState({
     state: 'checking',
     message: 'Checking backend',
     label: '',
   })
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) ?? scans[0]
+  const activeScanId = selectedScan?.id ?? null
+  const modelDimensions = modelDimensionState?.scanId === activeScanId ? modelDimensionState.dimensions : null
+  const calibrationLength = activeScanId ? calibrationByScan[activeScanId] ?? '' : ''
+
+  const calibratedDimensions = useMemo(() => {
+    if (!modelDimensions?.longest) return null
+
+    const knownLength = Number(calibrationLength)
+    const scale = Number.isFinite(knownLength) && knownLength > 0
+      ? knownLength / modelDimensions.longest
+      : 1
+    const unit = scale === 1 ? 'model units' : 'm'
+
+    return {
+      width: modelDimensions.width * scale,
+      height: modelDimensions.height * scale,
+      depth: modelDimensions.depth * scale,
+      unit,
+      calibrated: scale !== 1,
+    }
+  }, [calibrationLength, modelDimensions])
+
+  const handleModelDimensions = useCallback((dimensions) => {
+    setModelDimensionState({
+      scanId: activeScanId,
+      dimensions,
+    })
+  }, [activeScanId])
+
+  const updateCalibrationLength = useCallback((value) => {
+    if (!activeScanId) return
+    setCalibrationByScan((current) => ({
+      ...current,
+      [activeScanId]: value,
+    }))
+  }, [activeScanId])
 
   const sourceStats = useMemo(() => {
     const count = photos.length
@@ -333,14 +453,24 @@ function App() {
 
   // ── Photo handling ──
   const addFiles = useCallback(async (fileList) => {
-    const imageFiles = Array.from(fileList ?? [])
-      .filter((file) => file.type.startsWith('image/'))
-      .slice(0, MAX_PHOTOS)
+    const files = Array.from(fileList ?? [])
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+    const videoFiles = files.filter((file) => file.type.startsWith('video/'))
 
-    if (!imageFiles.length) return
+    if (!imageFiles.length && !videoFiles.length) return
 
-    const nextPhotos = await Promise.all(imageFiles.map(readImageFile))
-    setPhotos((current) => [...nextPhotos, ...current].slice(0, MAX_PHOTOS))
+    setErrorMessage('')
+
+    try {
+      const imagePhotos = await Promise.all(imageFiles.map(readImageFile))
+      const videoPhotos = (await Promise.all(videoFiles.map((file) => extractVideoFrames(file)))).flat()
+      const nextPhotos = [...imagePhotos, ...videoPhotos].slice(0, MAX_PHOTOS)
+
+      setPhotos((current) => [...nextPhotos, ...current].slice(0, MAX_PHOTOS))
+    } catch (err) {
+      console.error('Video frame extraction failed:', err)
+      setErrorMessage('Could not read that video. Try MP4/MOV or upload photos instead.')
+    }
   }, [])
 
   const handleDrop = useCallback(
@@ -352,15 +482,24 @@ function App() {
   )
 
   const stopCamera = useCallback(() => {
+    if (recorderRef.current?.state === 'recording') {
+      recorderRef.current.stop()
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
     setCameraOpen(false)
+    setIsRecording(false)
   }, [])
 
   const startCamera = useCallback(async () => {
     setCameraError('')
     try {
+      if (streamRef.current) {
+        setCameraOpen(true)
+        return streamRef.current
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
@@ -371,9 +510,11 @@ function App() {
       })
       streamRef.current = stream
       setCameraOpen(true)
+      return stream
     } catch {
       setCameraError('Camera unavailable')
       stopCamera()
+      return null
     }
   }, [stopCamera])
 
@@ -419,6 +560,76 @@ function App() {
       0.88,
     )
   }, [])
+
+  const startScanRecording = useCallback(async () => {
+    setCameraError('')
+    setErrorMessage('')
+
+    const stream = streamRef.current ?? await startCamera()
+    if (!stream) return
+    if (!window.MediaRecorder) {
+      setCameraError('Video recording is not supported in this browser')
+      return
+    }
+
+    const preferredTypes = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4',
+    ]
+    const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) || ''
+
+    recordedChunksRef.current = []
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+    recorderRef.current = recorder
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) recordedChunksRef.current.push(event.data)
+    }
+
+    recorder.onstop = async () => {
+      setIsRecording(false)
+      setRecordingSeconds(0)
+
+      const type = recorder.mimeType || 'video/webm'
+      const extension = type.includes('mp4') ? 'mp4' : 'webm'
+      const blob = new Blob(recordedChunksRef.current, { type })
+      recordedChunksRef.current = []
+
+      if (!blob.size) return
+
+      try {
+        const file = new File([blob], `space-scan-${Date.now()}.${extension}`, { type })
+        const frames = await extractVideoFrames(file, SCAN_RECORDING_FRAME_COUNT)
+        setMode('space')
+        setPhotos((current) => [...frames, ...current].slice(0, MAX_PHOTOS))
+      } catch (err) {
+        console.error('Recorded scan extraction failed:', err)
+        setErrorMessage('Could not turn that recording into scan frames. Try a slower walkthrough.')
+      }
+    }
+
+    recorder.start(1000)
+    setIsRecording(true)
+    setRecordingSeconds(0)
+  }, [startCamera])
+
+  const stopScanRecording = useCallback(() => {
+    if (recorderRef.current?.state === 'recording') {
+      recorderRef.current.stop()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isRecording) return undefined
+
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((value) => value + 1)
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [isRecording])
 
   const removePhoto = useCallback((id) => {
     setPhotos((current) => current.filter((photo) => photo.id !== id))
@@ -483,8 +694,8 @@ function App() {
 
       // Step 2: Upload photos to backend → Supabase storage
       const files = photos.map((p) => p.file).filter(Boolean)
-      if (files.length < 2) {
-        setErrorMessage('Need at least 2 photos with file data. Try re-uploading.')
+      if (files.length < 1) {
+        setErrorMessage('Need at least 1 photo with file data. Try re-uploading.')
         setIsUploading(false)
         return
       }
@@ -557,6 +768,43 @@ function App() {
     [selectedScan],
   )
 
+  const startLiveScan = useCallback(async () => {
+    try {
+      setErrorMessage('')
+      const scanName = `Live Space Capture ${scans.length + 1}`
+      const createResult = await createScan(scanName, 'space')
+      const newScanId = createResult.scan.id
+
+      setActiveLiveScanId(newScanId)
+      setIsLiveScanning(true)
+      setSelectedScanId(newScanId)
+    } catch (err) {
+      console.error('Failed to create live scan:', err)
+      setErrorMessage(err.message || 'Failed to start live scan')
+    }
+  }, [scans.length])
+
+  const handleLiveScanFinalized = useCallback(async () => {
+    // Reset live scanning state
+    setIsLiveScanning(false)
+
+    // Start processing the captured scan
+    if (activeLiveScanId) {
+      try {
+        setIsProcessing(true)
+        setProgress(0)
+        setStage(0)
+        setStageName('Starting...')
+
+        await startProcessing(activeLiveScanId, quality, detail)
+        startPolling(activeLiveScanId)
+      } catch (err) {
+        console.error('Failed to start processing:', err)
+        setErrorMessage(err.message || 'Failed to start processing')
+        setIsProcessing(false)
+      }
+    }
+  }, [activeLiveScanId, detail, quality, startPolling])
 
   return (
     <main className="app-shell">
@@ -594,12 +842,18 @@ function App() {
             </button>
           </div>
 
+          {mode === 'space' && !isLiveScanning && (
+            <button className="button primary" style={{ marginBottom: '16px' }} type="button" onClick={startLiveScan}>
+              🎥 Start Live Scan
+            </button>
+          )}
+
           <div className="capture-actions">
             <input
               ref={fileInputRef}
               id="photo-upload"
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple
               onChange={(event) => {
                 addFiles(event.target.files)
@@ -614,21 +868,38 @@ function App() {
               {cameraOpen ? <Square size={17} /> : <Camera size={17} />}
               {cameraOpen ? 'Stop' : 'Camera'}
             </button>
+            <button className={`button ${isRecording ? '' : 'primary'}`} type="button" onClick={isRecording ? stopScanRecording : startScanRecording}>
+              {isRecording ? <Square size={17} /> : <Video size={17} />}
+              {isRecording ? 'End scan' : 'Video scan'}
+            </button>
           </div>
 
           <button className="drop-zone" type="button" onClick={() => fileInputRef.current?.click()} onDrop={handleDrop} onDragOver={(event) => event.preventDefault()}>
             <ImagePlus size={22} />
-            <span>Drop photos</span>
-            <small>JPG, PNG, WEBP</small>
+            <span>Drop video or photos</span>
+            <small>MP4, MOV, JPG, PNG</small>
           </button>
 
           {cameraOpen && (
             <div className="camera-box">
               <video ref={videoRef} playsInline muted />
-              <button className="button primary" type="button" onClick={capturePhoto}>
-                <Aperture size={17} />
-                Capture
-              </button>
+              {isRecording && (
+                <div className="recording-strip">
+                  <span />
+                  <strong>Scanning space</strong>
+                  <small>{recordingSeconds}s</small>
+                </div>
+              )}
+              <div className="camera-controls">
+                <button className="button primary" type="button" onClick={capturePhoto} disabled={isRecording}>
+                  <Aperture size={17} />
+                  Capture
+                </button>
+                <button className="button" type="button" onClick={isRecording ? stopScanRecording : startScanRecording}>
+                  {isRecording ? <Square size={17} /> : <Video size={17} />}
+                  {isRecording ? 'Stop recording' : 'Record walkthrough'}
+                </button>
+              </div>
             </div>
           )}
           {cameraError && <p className="status-text warning">{cameraError}</p>}
@@ -652,7 +923,7 @@ function App() {
             {!photos.length && (
               <div className="empty-state">
                 <Sparkles size={18} />
-                <span>Ready for photos</span>
+                <span>Ready for video</span>
               </div>
             )}
           </div>
@@ -720,12 +991,18 @@ function App() {
         </header>
 
         <div className="viewer-surface">
-          {selectedScan ? (
-            <ScanViewer scan={selectedScan} autoRotate={autoRotate} renderMode={renderMode} />
+          {isLiveScanning && activeLiveScanId ? (
+            <LiveCameraScanner
+              scanId={activeLiveScanId}
+              quality={quality}
+              onScanFinalized={handleLiveScanFinalized}
+            />
+          ) : selectedScan ? (
+            <ScanViewer scan={selectedScan} autoRotate={autoRotate} renderMode={renderMode} onDimensions={handleModelDimensions} />
           ) : (
             <div className="empty-viewer">
               <ScanLine size={48} />
-              <p>Upload photos and process to see your 3D model</p>
+              <p>Upload a video and process to see your 3D model</p>
             </div>
           )}
 
@@ -798,6 +1075,44 @@ function App() {
               <strong>{selectedScan?.photo_count ?? 0}</strong>
             </div>
           </div>
+        </section>
+
+        <section className="panel-section">
+          <div className="section-heading">
+            <h2>Dimensions</h2>
+            <span>{calibratedDimensions?.calibrated ? 'calibrated' : 'estimate'}</span>
+          </div>
+
+          <div className="dimension-grid">
+            <div className="dimension">
+              <span>Width</span>
+              <strong>{formatMeasurement(calibratedDimensions?.width, calibratedDimensions?.unit)}</strong>
+            </div>
+            <div className="dimension">
+              <span>Height</span>
+              <strong>{formatMeasurement(calibratedDimensions?.height, calibratedDimensions?.unit)}</strong>
+            </div>
+            <div className="dimension">
+              <span>Depth</span>
+              <strong>{formatMeasurement(calibratedDimensions?.depth, calibratedDimensions?.unit)}</strong>
+            </div>
+          </div>
+
+          <label className="calibration-row">
+            <span>
+              <Ruler size={17} />
+              Known longest side
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="meters"
+              value={calibrationLength}
+              onChange={(event) => updateCalibrationLength(event.target.value)}
+            />
+          </label>
+          <p className="helper-text">Video gives relative scale. Enter one real measurement for meter-based dimensions.</p>
         </section>
 
         <section className="panel-section">
